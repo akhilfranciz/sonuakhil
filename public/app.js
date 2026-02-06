@@ -65,8 +65,6 @@ const configuration = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
     {
       urls: 'turn:openrelay.metered.ca:80',
       username: 'openrelayproject',
@@ -81,6 +79,21 @@ const configuration = {
       urls: 'turn:openrelay.metered.ca:443?transport=tcp',
       username: 'openrelayproject',
       credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:relay.metered.ca:80',
+      username: 'c420cc96b4dc264abfdd',
+      credential: 'nZB0PfXtL4fBdULy'
+    },
+    {
+      urls: 'turn:relay.metered.ca:443',
+      username: 'c420cc96b4dc264abfdd',
+      credential: 'nZB0PfXtL4fBdULy'
+    },
+    {
+      urls: 'turn:relay.metered.ca:443?transport=tcp',
+      username: 'c420cc96b4dc264abfdd',
+      credential: 'nZB0PfXtL4fBdULy'
     }
   ],
   iceCandidatePoolSize: 10
@@ -119,29 +132,43 @@ function createPeer(userId, initiator = false) {
 
   peer.onicecandidate = (event) => {
     if (event.candidate) {
-      console.log(`Sending ICE candidate to ${userId}`);
+      console.log(`📤 Sending ICE candidate to ${userId}:`, event.candidate.type, event.candidate.protocol);
       socket.emit('signal', {
         to: userId,
         signal: { candidate: event.candidate }
       });
+    } else {
+      console.log(`✅ ICE gathering complete for ${userId}`);
     }
   };
 
-  peer.ontrack = (event) => {
-    console.log(`Received track from ${userId}`);
-    addVideoStream(userId, event.streams[0]);
+  peer.onicecandidateerror = (event) => {
+    console.error(`❌ ICE candidate error for ${userId}:`, event);
   };
 
   peer.oniceconnectionstatechange = () => {
-    console.log(`ICE connection state for ${userId}: ${peer.iceConnectionState}`);
-    if (peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'disconnected') {
-      console.log(`Connection issue with ${userId}, attempting to restart ICE`);
+    console.log(`🔌 ICE connection state for ${userId}: ${peer.iceConnectionState}`);
+    if (peer.iceConnectionState === 'connected') {
+      console.log(`✅ Successfully connected to ${userId}`);
+    } else if (peer.iceConnectionState === 'failed') {
+      console.error(`❌ ICE connection failed for ${userId}, attempting to restart ICE`);
       peer.restartIce();
+    } else if (peer.iceConnectionState === 'disconnected') {
+      console.warn(`⚠️ ICE connection disconnected for ${userId}`);
     }
   };
 
+  peer.onicegatheringstatechange = () => {
+    console.log(`🔍 ICE gathering state for ${userId}: ${peer.iceGatheringState}`);
+  };
+
+  peer.ontrack = (event) => {
+    console.log(`📹 Received track from ${userId}`);
+    addVideoStream(userId, event.streams[0]);
+  };
+
   peer.onconnectionstatechange = () => {
-    console.log(`Connection state for ${userId}: ${peer.connectionState}`);
+    console.log(`📡 Connection state for ${userId}: ${peer.connectionState}`);
   };
 
   return peer;
