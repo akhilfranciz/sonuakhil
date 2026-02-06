@@ -1,4 +1,21 @@
-const socket = io();
+const socket = io({
+  reconnection: true,
+  reconnectionDelay: 1000,
+  reconnectionDelayMax: 5000,
+  reconnectionAttempts: 5
+});
+
+socket.on('connect_error', (error) => {
+  console.error('Socket connection error:', error);
+});
+
+socket.on('reconnect', (attemptNumber) => {
+  console.log('Socket reconnected after', attemptNumber, 'attempts');
+  if (roomId && localStream) {
+    socket.emit('join-room', roomId, socket.id);
+  }
+});
+
 const urlParams = new URLSearchParams(window.location.search);
 const roomId = urlParams.get('room');
 
@@ -22,7 +39,22 @@ const configuration = {
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
     { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' }
+    { urls: 'stun:stun4.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
   ],
   iceCandidatePoolSize: 10
 };
@@ -30,6 +62,7 @@ const configuration = {
 // Initialize media
 async function initMedia() {
   try {
+    console.log('Requesting media access...');
     localStream = await navigator.mediaDevices.getUserMedia({
       video: {
         width: { ideal: 1280 },
@@ -38,7 +71,9 @@ async function initMedia() {
       audio: true
     });
     
+    console.log('Media access granted');
     localVideo.srcObject = localStream;
+    console.log('Joining room:', roomId, 'with socket ID:', socket.id);
     socket.emit('join-room', roomId, socket.id);
   } catch (error) {
     console.error('Error accessing media devices:', error);
@@ -48,6 +83,7 @@ async function initMedia() {
 
 // Create peer connection
 function createPeer(userId, initiator = false) {
+  console.log(`Creating peer connection for ${userId}, initiator: ${initiator}`);
   const peer = new RTCPeerConnection(configuration);
   
   localStream.getTracks().forEach(track => {
@@ -56,6 +92,7 @@ function createPeer(userId, initiator = false) {
 
   peer.onicecandidate = (event) => {
     if (event.candidate) {
+      console.log(`Sending ICE candidate to ${userId}`);
       socket.emit('signal', {
         to: userId,
         signal: { candidate: event.candidate }
@@ -64,6 +101,7 @@ function createPeer(userId, initiator = false) {
   };
 
   peer.ontrack = (event) => {
+    console.log(`Received track from ${userId}`);
     addVideoStream(userId, event.streams[0]);
   };
 
@@ -120,6 +158,7 @@ function addVideoStream(userId, stream) {
 
 // Socket events
 socket.on('existing-users', (users) => {
+  console.log('Existing users in room:', users);
   users.forEach(userId => {
     const peer = createPeer(userId, true);
     peers[userId] = peer;
@@ -127,6 +166,7 @@ socket.on('existing-users', (users) => {
 });
 
 socket.on('user-connected', async (userId) => {
+  console.log('User connected:', userId);
   const peer = createPeer(userId, false);
   peers[userId] = peer;
 });
