@@ -38,26 +38,27 @@ io.on('connection', (socket) => {
     // Send list of existing users
     const existingUsers = Array.from(rooms.get(roomId)).filter(id => id !== userId);
     socket.emit('existing-users', existingUsers);
+  });
 
-    socket.on('signal', (data) => {
-      io.to(data.to).emit('signal', {
-        from: userId,
-        signal: data.signal
-      });
+  socket.on('signal', (data) => {
+    console.log(`Signal from ${socket.id} to ${data.to}:`, data.signal.sdp ? data.signal.sdp.type : 'ICE candidate');
+    io.to(data.to).emit('signal', {
+      from: currentUserId,
+      signal: data.signal
     });
+  });
 
-    socket.on('disconnect', () => {
-      if (currentRoomId && currentUserId) {
-        socket.to(currentRoomId).emit('user-disconnected', currentUserId);
-        if (rooms.has(currentRoomId)) {
-          rooms.get(currentRoomId).delete(currentUserId);
-          if (rooms.get(currentRoomId).size === 0) {
-            rooms.delete(currentRoomId);
-          }
+  socket.on('disconnect', () => {
+    if (currentRoomId && currentUserId) {
+      socket.to(currentRoomId).emit('user-disconnected', currentUserId);
+      if (rooms.has(currentRoomId)) {
+        rooms.get(currentRoomId).delete(currentUserId);
+        if (rooms.get(currentRoomId).size === 0) {
+          rooms.delete(currentRoomId);
         }
-        console.log(`User ${currentUserId} disconnected from room ${currentRoomId}`);
       }
-    });
+      console.log(`User ${currentUserId} disconnected from room ${currentRoomId}`);
+    }
   });
 });
 
