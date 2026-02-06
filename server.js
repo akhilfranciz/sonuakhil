@@ -8,7 +8,10 @@ const io = require('socket.io')(http, {
     methods: ['GET', 'POST']
   },
   pingTimeout: 60000,
-  pingInterval: 25000
+  pingInterval: 25000,
+  path: '/socket.io/',
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 
 app.use(express.static(path.join(__dirname, 'public')));

@@ -2,16 +2,30 @@ const socket = io({
   reconnection: true,
   reconnectionDelay: 1000,
   reconnectionDelayMax: 5000,
-  reconnectionAttempts: 5,
-  transports: ['websocket', 'polling']
+  reconnectionAttempts: 10,
+  transports: ['websocket', 'polling'],
+  upgrade: true,
+  rememberUpgrade: true,
+  path: '/socket.io/'
 });
 
+console.log('Initializing Socket.IO connection...');
+
 socket.on('connect', () => {
-  console.log('Socket connected:', socket.id);
+  console.log('✅ Socket connected successfully:', socket.id);
+  console.log('Transport:', socket.io.engine.transport.name);
+  updateConnectionStatus('Connected ✓', '#4caf50');
 });
 
 socket.on('connect_error', (error) => {
-  console.error('Socket connection error:', error);
+  console.error('❌ Socket connection error:', error.message);
+  console.error('Full error:', error);
+  updateConnectionStatus('Connection Error ✗', '#f44336');
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('Socket disconnected:', reason);
+  updateConnectionStatus('Disconnected', '#ff9800');
 });
 
 socket.on('reconnect', (attemptNumber) => {
@@ -30,11 +44,18 @@ if (!roomId) {
 
 document.getElementById('roomNumber').textContent = roomId;
 
+const connectionStatus = document.getElementById('connectionStatus');
 const localVideo = document.getElementById('localVideo');
 const videosGrid = document.getElementById('videosGrid');
 const toggleVideoBtn = document.getElementById('toggleVideo');
 const toggleAudioBtn = document.getElementById('toggleAudio');
 const leaveCallBtn = document.getElementById('leaveCall');
+
+// Update connection status
+function updateConnectionStatus(status, color) {
+  connectionStatus.textContent = status;
+  connectionStatus.style.color = color;
+}
 
 let localStream;
 let peers = {};
