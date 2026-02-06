@@ -19,8 +19,12 @@ let peers = {};
 const configuration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
-  ]
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
+  ],
+  iceCandidatePoolSize: 10
 };
 
 // Initialize media
@@ -61,6 +65,14 @@ function createPeer(userId, initiator = false) {
 
   peer.ontrack = (event) => {
     addVideoStream(userId, event.streams[0]);
+  };
+
+  peer.oniceconnectionstatechange = () => {
+    console.log(`ICE connection state for ${userId}: ${peer.iceConnectionState}`);
+    if (peer.iceConnectionState === 'failed' || peer.iceConnectionState === 'disconnected') {
+      console.log(`Connection issue with ${userId}, attempting to restart ICE`);
+      peer.restartIce();
+    }
   };
 
   peer.onnegotiationneeded = async () => {
@@ -121,11 +133,23 @@ socket.on('user-connected', async (userId) => {
 
 socket.on('signal', async (data) => {
   const peer = peers[data.from];
-  if (!peer) return;
+  if (!peer) {
+    console.warn(`Received signal from unknown peer: ${data.from}`);
+    return;
+  }
 
   try {
     if (data.signal.sdp) {
-      await peer.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
+      // Check signaling state before setting remote description
+      if (peer.signalingState !== 'stable' && data.signal.sdp.type === 'offer') {
+        console.log('Collision detected, handling offer in non-stable state');
+        await Promise.all([
+          peer.setLocalDescription({ type: 'rollback' }),
+          peer.setRemoteDescription(new RTCSessionDescription(data.signal.sdp))
+        ]);
+      } else {
+        await peer.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
+      }
       
       if (data.signal.sdp.type === 'offer') {
         const answer = await peer.createAnswer();
@@ -136,10 +160,14 @@ socket.on('signal', async (data) => {
         });
       }
     } else if (data.signal.candidate) {
-      await peer.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+      if (peer.remoteDescription) {
+        await peer.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+      } else {
+        console.log('Queuing ICE candidate until remote description is set');
+      }
     }
   } catch (error) {
-    console.error('Error handling signal:', error);
+    console.error('Error handling signal:', error, data);
   }
 });
 

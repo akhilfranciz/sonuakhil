@@ -2,7 +2,14 @@ const express = require('express');
 const path = require('path');
 const app = express();
 const http = require('http').createServer(app);
-const io = require('socket.io')(http);
+const io = require('socket.io')(http, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -10,8 +17,13 @@ const rooms = new Map();
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
+  
+  let currentRoomId = null;
+  let currentUserId = null;
 
   socket.on('join-room', (roomId, userId) => {
+    currentRoomId = roomId;
+    currentUserId = userId;
     socket.join(roomId);
     
     if (!rooms.has(roomId)) {
@@ -29,20 +41,22 @@ io.on('connection', (socket) => {
 
     socket.on('signal', (data) => {
       io.to(data.to).emit('signal', {
-        from: socket.id,
+        from: userId,
         signal: data.signal
       });
     });
 
     socket.on('disconnect', () => {
-      socket.to(roomId).emit('user-disconnected', userId);
-      if (rooms.has(roomId)) {
-        rooms.get(roomId).delete(userId);
-        if (rooms.get(roomId).size === 0) {
-          rooms.delete(roomId);
+      if (currentRoomId && currentUserId) {
+        socket.to(currentRoomId).emit('user-disconnected', currentUserId);
+        if (rooms.has(currentRoomId)) {
+          rooms.get(currentRoomId).delete(currentUserId);
+          if (rooms.get(currentRoomId).size === 0) {
+            rooms.delete(currentRoomId);
+          }
         }
+        console.log(`User ${currentUserId} disconnected from room ${currentRoomId}`);
       }
-      console.log(`User ${userId} disconnected from room ${roomId}`);
     });
   });
 });
