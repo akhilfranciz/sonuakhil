@@ -33,6 +33,7 @@ const leaveCallBtn = document.getElementById('leaveCall');
 
 let localStream;
 let peers = {};
+let iceCandidatesQueue = {};
 const configuration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -113,19 +114,8 @@ function createPeer(userId, initiator = false) {
     }
   };
 
-  peer.onnegotiationneeded = async () => {
-    try {
-      if (initiator) {
-        const offer = await peer.createOffer();
-        await peer.setLocalDescription(offer);
-        socket.emit('signal', {
-          to: userId,
-          signal: { sdp: peer.localDescription }
-        });
-      }
-    } catch (error) {
-      console.error('Error during negotiation:', error);
-    }
+  peer.onconnectionstatechange = () => {
+    console.log(`Connection state for ${userId}: ${peer.connectionState}`);
   };
 
   return peer;
@@ -157,22 +147,38 @@ function addVideoStream(userId, stream) {
 }
 
 // Socket events
-socket.on('existing-users', (users) => {
+socket.on('existing-users', async (users) => {
   console.log('Existing users in room:', users);
-  users.forEach(userId => {
+  for (const userId of users) {
     const peer = createPeer(userId, true);
     peers[userId] = peer;
-  });
+    iceCandidatesQueue[userId] = [];
+    
+    // Explicitly create and send offer
+    try {
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      console.log(`Sending offer to ${userId}`);
+      socket.emit('signal', {
+        to: userId,
+        signal: { sdp: peer.localDescription }
+      });
+    } catch (error) {
+      console.error(`Error creating offer for ${userId}:`, error);
+    }
+  }
 });
 
 socket.on('user-connected', async (userId) => {
   console.log('User connected:', userId);
   const peer = createPeer(userId, false);
   peers[userId] = peer;
+  iceCandidatesQueue[userId] = [];
 });
 
 socket.on('signal', async (data) => {
-  const peer = peers[data.from];
+  let peer = peers[data.from];
+  
   if (!peer) {
     console.warn(`Received signal from unknown peer: ${data.from}`);
     return;
@@ -180,6 +186,8 @@ socket.on('signal', async (data) => {
 
   try {
     if (data.signal.sdp) {
+      console.log(`Received ${data.signal.sdp.type} from ${data.from}`);
+      
       // Check signaling state before setting remote description
       if (peer.signalingState !== 'stable' && data.signal.sdp.type === 'offer') {
         console.log('Collision detected, handling offer in non-stable state');
@@ -191,19 +199,39 @@ socket.on('signal', async (data) => {
         await peer.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
       }
       
+      // Process queued ICE candidates after setting remote description
+      if (iceCandidatesQueue[data.from] && iceCandidatesQueue[data.from].length > 0) {
+        console.log(`Processing ${iceCandidatesQueue[data.from].length} queued candidates for ${data.from}`);
+        for (const candidate of iceCandidatesQueue[data.from]) {
+          try {
+            await peer.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            console.error('Error adding queued candidate:', err);
+          }
+        }
+        iceCandidatesQueue[data.from] = [];
+      }
+      
       if (data.signal.sdp.type === 'offer') {
         const answer = await peer.createAnswer();
         await peer.setLocalDescription(answer);
+        console.log(`Sending answer to ${data.from}`);
         socket.emit('signal', {
           to: data.from,
           signal: { sdp: peer.localDescription }
         });
       }
     } else if (data.signal.candidate) {
-      if (peer.remoteDescription) {
+      console.log(`Received ICE candidate from ${data.from}`);
+      if (peer.remoteDescription && peer.remoteDescription.type) {
         await peer.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+        console.log(`Added ICE candidate for ${data.from}`);
       } else {
-        console.log('Queuing ICE candidate until remote description is set');
+        console.log(`Queuing ICE candidate for ${data.from} until remote description is set`);
+        if (!iceCandidatesQueue[data.from]) {
+          iceCandidatesQueue[data.from] = [];
+        }
+        iceCandidatesQueue[data.from].push(data.signal.candidate);
       }
     }
   } catch (error) {
@@ -212,9 +240,14 @@ socket.on('signal', async (data) => {
 });
 
 socket.on('user-disconnected', (userId) => {
+  console.log(`User ${userId} disconnected`);
   if (peers[userId]) {
     peers[userId].close();
     delete peers[userId];
+  }
+  
+  if (iceCandidatesQueue[userId]) {
+    delete iceCandidatesQueue[userId];
   }
   
   const videoWrapper = document.getElementById(`wrapper-${userId}`);
