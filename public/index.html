@@ -3,51 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>sonu Akhil - Join Room</title>
+  <title>Video Chat</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div class="login-container">
-    <div class="login-card">
-      <h1>Video ♡ Room</h1>
-      <p class="subtitle">Enter a room number to join or create a video call</p>
-      
+  <div class="join-container">
+    <div class="join-card">
+      <h1>📹 Video Chat</h1>
+      <p>Enter a room number to start or join a video call</p>
       <form id="joinForm">
-        <div class="input-group">
-          <label for="roomId">Room Number</label>
-          <input 
-            type="text" 
-            id="roomId" 
-            placeholder="Enter room number (e.g., 12345)" 
-            required
-            autocomplete="off"
-          >
-        </div>
-        
-        <button type="submit" class="join-btn">Join Room</button>
+        <input type="text" id="roomInput" placeholder="Room number (e.g. 1234)" required autocomplete="off" />
+        <button type="submit">Join Room</button>
       </form>
-      
-      <div class="info">
-        <p>💡 Share the same room number with others to video chat together</p>
-      </div>
+      <p class="hint">Share the same room number with others to connect</p>
     </div>
   </div>
-
   <script>
-    const form = document.getElementById('joinForm');
-    const roomIdInput = document.getElementById('roomId');
-
-    form.addEventListener('submit', (e) => {
+    document.getElementById('joinForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      const roomId = roomIdInput.value.trim();
-      
-      if (roomId) {
-        window.location.href = `room.html?room=${encodeURIComponent(roomId)}`;
-      }
+      const room = document.getElementById('roomInput').value.trim();
+      if (room) window.location.href = `/room.html?room=${encodeURIComponent(room)}`;
     });
-
-    // Auto-focus on room input
-    roomIdInput.focus();
   </script>
 </body>
 </html>

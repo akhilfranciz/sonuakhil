@@ -1,86 +1,20 @@
-const socket = io({
-  reconnection: true,
-  reconnectionDelay: 1000,
-  reconnectionDelayMax: 5000,
-  reconnectionAttempts: 10,
-  transports: ['websocket', 'polling'],
-  upgrade: true,
-  rememberUpgrade: true,
-  path: '/socket.io/',
-  secure: true,
-  rejectUnauthorized: false
-});
+// --- Config ---
+const roomId = new URLSearchParams(window.location.search).get('room');
+if (!roomId) window.location.href = '/';
+document.getElementById('roomId').textContent = roomId;
 
-console.log('Initializing Socket.IO connection...');
+const socket = io();
+const peers = {};       // { oderId: RTCPeerConnection }
+let localStream = null;
 
-socket.on('connect', () => {
-  console.log('✅ Socket connected successfully:', socket.id);
-  console.log('Transport:', socket.io.engine.transport.name);
-  updateConnectionStatus('Connected ✓', '#4caf50');
-});
-
-socket.on('connect_error', (error) => {
-  console.error('❌ Socket connection error:', error.message);
-  console.error('Full error:', error);
-  updateConnectionStatus('Connection Error ✗', '#f44336');
-});
-
-socket.on('disconnect', (reason) => {
-  console.log('Socket disconnected:', reason);
-  updateConnectionStatus('Disconnected', '#ff9800');
-});
-
-socket.on('reconnect', (attemptNumber) => {
-  console.log('Socket reconnected after', attemptNumber, 'attempts');
-  if (roomId && localStream) {
-    socket.emit('join-room', roomId, socket.id);
-  }
-});
-
-const urlParams = new URLSearchParams(window.location.search);
-const roomId = urlParams.get('room');
-
-if (!roomId) {
-  window.location.href = '/';
-}
-
-document.getElementById('roomNumber').textContent = roomId;
-
-const connectionStatus = document.getElementById('connectionStatus');
-const localVideo = document.getElementById('localVideo');
-const videosGrid = document.getElementById('videosGrid');
-const toggleVideoBtn = document.getElementById('toggleVideo');
-const toggleAudioBtn = document.getElementById('toggleAudio');
-const leaveCallBtn = document.getElementById('leaveCall');
-
-// Update connection status
-function updateConnectionStatus(status, color) {
-  connectionStatus.textContent = status;
-  connectionStatus.style.color = color;
-}
-
-let localStream;
-let peers = {};
-let iceCandidatesQueue = {};
-const configuration = {
+const iceConfig = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
     {
-      urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
+      urls: 'turn:relay1.expressturn.com:443',
+      username: 'efCZCUAFI7KIQFHIUO',
+      credential: 'XhKxIrNHnMPMlkFt'
     },
     {
       urls: 'turn:relay.metered.ca:80',
@@ -97,244 +31,192 @@ const configuration = {
       username: 'c420cc96b4dc264abfdd',
       credential: 'nZB0PfXtL4fBdULy'
     }
-  ],
-  iceCandidatePoolSize: 10,
-  iceTransportPolicy: 'all',  // 'all' or 'relay' - use 'relay' to force TURN if direct connections fail
-  bundlePolicy: 'max-bundle',
-  rtcpMuxPolicy: 'require'
+  ]
 };
 
-// Initialize media
-async function initMedia() {
+// --- Status ---
+function setStatus(text, color) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.style.color = color || '#fff';
+}
+
+// --- Start ---
+async function start() {
   try {
-    console.log('Requesting media access...');
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 }
-      },
-      audio: true
-    });
-    
-    console.log('Media access granted');
-    localVideo.srcObject = localStream;
-    console.log('Joining room:', roomId, 'with socket ID:', socket.id);
-    socket.emit('join-room', roomId, socket.id);
-  } catch (error) {
-    console.error('Error accessing media devices:', error);
-    alert('Please allow camera and microphone access to join the video chat');
-  }
-}
-
-// Create peer connection
-function createPeer(userId, initiator = false) {
-  console.log(`Creating peer connection for ${userId}, initiator: ${initiator}`);
-  const peer = new RTCPeerConnection(configuration);
-  
-  localStream.getTracks().forEach(track => {
-    peer.addTrack(track, localStream);
-  });
-
-  peer.onicecandidate = (event) => {
-    if (event.candidate) {
-      console.log(`📤 Sending ICE candidate to ${userId}:`, event.candidate.type, event.candidate.protocol);
-      socket.emit('signal', {
-        to: userId,
-        signal: { candidate: event.candidate }
-      });
-    } else {
-      console.log(`✅ ICE gathering complete for ${userId}`);
-    }
-  };
-
-  peer.onicecandidateerror = (event) => {
-    console.error(`❌ ICE candidate error for ${userId}:`, event);
-  };
-
-  peer.oniceconnectionstatechange = () => {
-    console.log(`🔌 ICE connection state for ${userId}: ${peer.iceConnectionState}`);
-    if (peer.iceConnectionState === 'connected') {
-      console.log(`✅ Successfully connected to ${userId}`);
-    } else if (peer.iceConnectionState === 'failed') {
-      console.error(`❌ ICE connection failed for ${userId}, attempting to restart ICE`);
-      peer.restartIce();
-    } else if (peer.iceConnectionState === 'disconnected') {
-      console.warn(`⚠️ ICE connection disconnected for ${userId}`);
-    }
-  };
-
-  peer.onicegatheringstatechange = () => {
-    console.log(`🔍 ICE gathering state for ${userId}: ${peer.iceGatheringState}`);
-  };
-
-  peer.ontrack = (event) => {
-    console.log(`📹 Received track from ${userId}`);
-    addVideoStream(userId, event.streams[0]);
-  };
-
-  peer.onconnectionstatechange = () => {
-    console.log(`📡 Connection state for ${userId}: ${peer.connectionState}`);
-  };
-
-  return peer;
-}
-
-// Add video stream to grid
-function addVideoStream(userId, stream) {
-  if (document.getElementById(`video-${userId}`)) {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    document.getElementById('localVideo').srcObject = localStream;
+  } catch (err) {
+    alert('Camera/mic access is required.');
     return;
   }
 
-  const videoWrapper = document.createElement('div');
-  videoWrapper.className = 'video-wrapper';
-  videoWrapper.id = `wrapper-${userId}`;
+  socket.emit('join-room', roomId);
+}
+
+// --- Create a peer connection to a remote user ---
+function createPeer(remoteId) {
+  const pc = new RTCPeerConnection(iceConfig);
+
+  // Add our tracks
+  localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+  // Send ICE candidates to remote
+  pc.onicecandidate = (e) => {
+    if (e.candidate) {
+      socket.emit('ice-candidate', { to: remoteId, candidate: e.candidate });
+    }
+  };
+
+  // When we receive remote tracks, show them
+  pc.ontrack = (e) => {
+    if (!document.getElementById(`video-${remoteId}`)) {
+      addRemoteVideo(remoteId, e.streams[0]);
+    }
+  };
+
+  // Connection state logging
+  pc.oniceconnectionstatechange = () => {
+    console.log(`ICE [${remoteId}]: ${pc.iceConnectionState}`);
+    if (pc.iceConnectionState === 'connected') {
+      setStatus('Connected ✓', '#4caf50');
+    } else if (pc.iceConnectionState === 'failed') {
+      console.log('ICE failed, restarting...');
+      pc.restartIce();
+    }
+  };
+
+  peers[remoteId] = pc;
+  return pc;
+}
+
+// --- Add remote video element ---
+function addRemoteVideo(id, stream) {
+  const box = document.createElement('div');
+  box.className = 'video-box';
+  box.id = `box-${id}`;
 
   const video = document.createElement('video');
-  video.id = `video-${userId}`;
+  video.id = `video-${id}`;
   video.srcObject = stream;
   video.autoplay = true;
   video.playsinline = true;
 
   const label = document.createElement('span');
-  label.className = 'video-label';
-  label.textContent = `User ${userId.substring(0, 6)}`;
+  label.className = 'label';
+  label.textContent = `User ${id.slice(0, 5)}`;
 
-  videoWrapper.appendChild(video);
-  videoWrapper.appendChild(label);
-  videosGrid.appendChild(videoWrapper);
+  box.appendChild(video);
+  box.appendChild(label);
+  document.getElementById('videos').appendChild(box);
 }
 
-// Socket events
-socket.on('existing-users', async (users) => {
-  console.log('Existing users in room:', users);
-  for (const userId of users) {
-    const peer = createPeer(userId, true);
-    peers[userId] = peer;
-    iceCandidatesQueue[userId] = [];
-    
-    // Explicitly create and send offer
+// --- Remove remote video ---
+function removeRemoteVideo(id) {
+  const box = document.getElementById(`box-${id}`);
+  if (box) box.remove();
+  if (peers[id]) {
+    peers[id].close();
+    delete peers[id];
+  }
+}
+
+// =====================
+// Socket Events
+// =====================
+
+socket.on('connect', () => {
+  setStatus('Connected to server', '#4caf50');
+});
+
+socket.on('connect_error', () => {
+  setStatus('Connection error ✗', '#f44336');
+});
+
+// When we join, server sends list of existing users → we call each of them
+socket.on('all-users', async (userIds) => {
+  for (const id of userIds) {
+    const pc = createPeer(id);
     try {
-      const offer = await peer.createOffer();
-      await peer.setLocalDescription(offer);
-      console.log(`Sending offer to ${userId}`);
-      socket.emit('signal', {
-        to: userId,
-        signal: { sdp: peer.localDescription }
-      });
-    } catch (error) {
-      console.error(`Error creating offer for ${userId}:`, error);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit('offer', { to: id, sdp: pc.localDescription });
+    } catch (err) {
+      console.error('Error creating offer:', err);
     }
   }
 });
 
-socket.on('user-connected', async (userId) => {
-  console.log('User connected:', userId);
-  const peer = createPeer(userId, false);
-  peers[userId] = peer;
-  iceCandidatesQueue[userId] = [];
-});
-
-socket.on('signal', async (data) => {
-  let peer = peers[data.from];
-  
-  if (!peer) {
-    console.warn(`Received signal from unknown peer: ${data.from}`);
-    return;
-  }
-
+// Someone sent us an offer → answer it
+socket.on('offer', async (data) => {
+  const pc = createPeer(data.from);
   try {
-    if (data.signal.sdp) {
-      console.log(`Received ${data.signal.sdp.type} from ${data.from}`);
-      
-      // Check signaling state before setting remote description
-      if (peer.signalingState !== 'stable' && data.signal.sdp.type === 'offer') {
-        console.log('Collision detected, handling offer in non-stable state');
-        await Promise.all([
-          peer.setLocalDescription({ type: 'rollback' }),
-          peer.setRemoteDescription(new RTCSessionDescription(data.signal.sdp))
-        ]);
-      } else {
-        await peer.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
-      }
-      
-      // Process queued ICE candidates after setting remote description
-      if (iceCandidatesQueue[data.from] && iceCandidatesQueue[data.from].length > 0) {
-        console.log(`Processing ${iceCandidatesQueue[data.from].length} queued candidates for ${data.from}`);
-        for (const candidate of iceCandidatesQueue[data.from]) {
-          try {
-            await peer.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (err) {
-            console.error('Error adding queued candidate:', err);
-          }
-        }
-        iceCandidatesQueue[data.from] = [];
-      }
-      
-      if (data.signal.sdp.type === 'offer') {
-        const answer = await peer.createAnswer();
-        await peer.setLocalDescription(answer);
-        console.log(`Sending answer to ${data.from}`);
-        socket.emit('signal', {
-          to: data.from,
-          signal: { sdp: peer.localDescription }
-        });
-      }
-    } else if (data.signal.candidate) {
-      console.log(`Received ICE candidate from ${data.from}`);
-      if (peer.remoteDescription && peer.remoteDescription.type) {
-        await peer.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
-        console.log(`Added ICE candidate for ${data.from}`);
-      } else {
-        console.log(`Queuing ICE candidate for ${data.from} until remote description is set`);
-        if (!iceCandidatesQueue[data.from]) {
-          iceCandidatesQueue[data.from] = [];
-        }
-        iceCandidatesQueue[data.from].push(data.signal.candidate);
-      }
+    await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('answer', { to: data.from, sdp: pc.localDescription });
+  } catch (err) {
+    console.error('Error handling offer:', err);
+  }
+});
+
+// We get an answer to our offer
+socket.on('answer', async (data) => {
+  const pc = peers[data.from];
+  if (pc) {
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+    } catch (err) {
+      console.error('Error setting answer:', err);
     }
-  } catch (error) {
-    console.error('Error handling signal:', error, data);
   }
 });
 
-socket.on('user-disconnected', (userId) => {
-  console.log(`User ${userId} disconnected`);
-  if (peers[userId]) {
-    peers[userId].close();
-    delete peers[userId];
-  }
-  
-  if (iceCandidatesQueue[userId]) {
-    delete iceCandidatesQueue[userId];
-  }
-  
-  const videoWrapper = document.getElementById(`wrapper-${userId}`);
-  if (videoWrapper) {
-    videoWrapper.remove();
+// ICE candidate from remote
+socket.on('ice-candidate', async (data) => {
+  const pc = peers[data.from];
+  if (pc) {
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+    } catch (err) {
+      console.error('Error adding ICE candidate:', err);
+    }
   }
 });
 
+// User left
+socket.on('user-left', (id) => {
+  removeRemoteVideo(id);
+});
+
+// =====================
 // Controls
-toggleVideoBtn.addEventListener('click', () => {
-  const videoTrack = localStream.getVideoTracks()[0];
-  if (videoTrack) {
-    videoTrack.enabled = !videoTrack.enabled;
-    toggleVideoBtn.classList.toggle('active');
+// =====================
+
+document.getElementById('toggleVideo').addEventListener('click', (e) => {
+  const track = localStream.getVideoTracks()[0];
+  if (track) {
+    track.enabled = !track.enabled;
+    e.currentTarget.classList.toggle('active', track.enabled);
+    e.currentTarget.textContent = track.enabled ? '📹 Video' : '🚫 Video';
   }
 });
 
-toggleAudioBtn.addEventListener('click', () => {
-  const audioTrack = localStream.getAudioTracks()[0];
-  if (audioTrack) {
-    audioTrack.enabled = !audioTrack.enabled;
-    toggleAudioBtn.classList.toggle('active');
+document.getElementById('toggleAudio').addEventListener('click', (e) => {
+  const track = localStream.getAudioTracks()[0];
+  if (track) {
+    track.enabled = !track.enabled;
+    e.currentTarget.classList.toggle('active', track.enabled);
+    e.currentTarget.textContent = track.enabled ? '🎤 Audio' : '🔇 Audio';
   }
 });
 
-leaveCallBtn.addEventListener('click', () => {
-  localStream.getTracks().forEach(track => track.stop());
+document.getElementById('leaveCall').addEventListener('click', () => {
+  localStream.getTracks().forEach((t) => t.stop());
+  Object.values(peers).forEach((pc) => pc.close());
+  socket.disconnect();
   window.location.href = '/';
 });
 
-// Initialize
-initMedia();
+// Start everything
+start();

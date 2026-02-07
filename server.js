@@ -3,75 +3,60 @@ const path = require('path');
 const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
-    credentials: true,
-    allowedHeaders: ['Content-Type']
-  },
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  path: '/socket.io/',
-  transports: ['websocket', 'polling'],
-  allowEIO3: true,
-  allowUpgrades: true,
-  cookie: false
+  cors: { origin: '*' }
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-const rooms = new Map();
+// Store rooms: { roomId: { socketId: true } }
+const rooms = {};
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
-  
-  let currentRoomId = null;
-  let currentUserId = null;
+  console.log('Connected:', socket.id);
 
-  socket.on('join-room', (roomId, userId) => {
-    currentRoomId = roomId;
-    currentUserId = userId;
+  socket.on('join-room', (roomId) => {
+    // Create room if it doesn't exist
+    if (!rooms[roomId]) rooms[roomId] = {};
+
+    // Send list of existing users to the new user
+    const usersInRoom = Object.keys(rooms[roomId]);
+    socket.emit('all-users', usersInRoom);
+
+    // Add user to room
+    rooms[roomId][socket.id] = true;
     socket.join(roomId);
-    
-    if (!rooms.has(roomId)) {
-      rooms.set(roomId, new Set());
-    }
-    rooms.get(roomId).add(userId);
+    socket.roomId = roomId;
 
-    // Notify others in the room
-    socket.to(roomId).emit('user-connected', userId);
-    console.log(`User ${userId} joined room ${roomId}`);
-
-    // Send list of existing users
-    const existingUsers = Array.from(rooms.get(roomId)).filter(id => id !== userId);
-    socket.emit('existing-users', existingUsers);
+    console.log(`${socket.id} joined room ${roomId} (${usersInRoom.length + 1} users)`);
   });
 
-  socket.on('signal', (data) => {
-    console.log(`Signal from ${socket.id} to ${data.to}:`, data.signal.sdp ? data.signal.sdp.type : 'ICE candidate');
-    io.to(data.to).emit('signal', {
-      from: currentUserId,
-      signal: data.signal
-    });
+  // Relay WebRTC signaling messages
+  socket.on('offer', (data) => {
+    socket.to(data.to).emit('offer', { from: socket.id, sdp: data.sdp });
+  });
+
+  socket.on('answer', (data) => {
+    socket.to(data.to).emit('answer', { from: socket.id, sdp: data.sdp });
+  });
+
+  socket.on('ice-candidate', (data) => {
+    socket.to(data.to).emit('ice-candidate', { from: socket.id, candidate: data.candidate });
   });
 
   socket.on('disconnect', () => {
-    if (currentRoomId && currentUserId) {
-      socket.to(currentRoomId).emit('user-disconnected', currentUserId);
-      if (rooms.has(currentRoomId)) {
-        rooms.get(currentRoomId).delete(currentUserId);
-        if (rooms.get(currentRoomId).size === 0) {
-          rooms.delete(currentRoomId);
-        }
+    const roomId = socket.roomId;
+    if (roomId && rooms[roomId]) {
+      delete rooms[roomId][socket.id];
+      socket.to(roomId).emit('user-left', socket.id);
+      if (Object.keys(rooms[roomId]).length === 0) {
+        delete rooms[roomId];
       }
-      console.log(`User ${currentUserId} disconnected from room ${currentRoomId}`);
     }
+    console.log('Disconnected:', socket.id);
   });
 });
 
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Network access: Use your local IP address on port ${PORT}`);
-  console.log(`Example: http://192.168.1.x:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
