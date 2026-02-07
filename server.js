@@ -5,13 +5,17 @@ const http = require('http').createServer(app);
 const io = require('socket.io')(http, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST']
+    methods: ['GET', 'POST'],
+    credentials: true,
+    allowedHeaders: ['Content-Type']
   },
   pingTimeout: 60000,
   pingInterval: 25000,
   path: '/socket.io/',
   transports: ['websocket', 'polling'],
-  allowEIO3: true
+  allowEIO3: true,
+  allowUpgrades: true,
+  cookie: false
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -66,6 +70,8 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
+http.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Network access: Use your local IP address on port ${PORT}`);
+  console.log(`Example: http://192.168.1.x:${PORT}`);
 });

@@ -6,7 +6,9 @@ const socket = io({
   transports: ['websocket', 'polling'],
   upgrade: true,
   rememberUpgrade: true,
-  path: '/socket.io/'
+  path: '/socket.io/',
+  secure: true,
+  rejectUnauthorized: false
 });
 
 console.log('Initializing Socket.IO connection...');
@@ -96,7 +98,10 @@ const configuration = {
       credential: 'nZB0PfXtL4fBdULy'
     }
   ],
-  iceCandidatePoolSize: 10
+  iceCandidatePoolSize: 10,
+  iceTransportPolicy: 'all',  // 'all' or 'relay' - use 'relay' to force TURN if direct connections fail
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require'
 };
 
 // Initialize media
