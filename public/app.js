@@ -4,8 +4,9 @@ if (!roomId) window.location.href = '/';
 document.getElementById('roomId').textContent = roomId;
 
 const socket = io();
-const peers = {};       // { oderId: RTCPeerConnection }
+const peers = {};
 let localStream = null;
+let isSwapped = false;
 
 const iceConfig = {
   iceServers: [
@@ -34,55 +35,62 @@ const iceConfig = {
   ]
 };
 
+// --- DOM ---
+const localVideo = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
+const waitingText = document.getElementById('waitingText');
+const callScreen = document.querySelector('.call-screen');
+
 // --- Status ---
 function setStatus(text, color) {
   const el = document.getElementById('status');
   el.textContent = text;
-  el.style.color = color || '#fff';
+  el.style.color = color || '#8696a0';
+}
+
+// --- Swap videos ---
+function swapVideos() {
+  isSwapped = !isSwapped;
+  callScreen.classList.toggle('swapped', isSwapped);
 }
 
 // --- Start ---
 async function start() {
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    document.getElementById('localVideo').srcObject = localStream;
+    localVideo.srcObject = localStream;
   } catch (err) {
     alert('Camera/mic access is required.');
     return;
   }
-
   socket.emit('join-room', roomId);
 }
 
-// --- Create a peer connection to a remote user ---
+// --- Create peer connection ---
 function createPeer(remoteId) {
   const pc = new RTCPeerConnection(iceConfig);
 
-  // Add our tracks
   localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
-  // Send ICE candidates to remote
   pc.onicecandidate = (e) => {
     if (e.candidate) {
       socket.emit('ice-candidate', { to: remoteId, candidate: e.candidate });
     }
   };
 
-  // When we receive remote tracks, show them
   pc.ontrack = (e) => {
-    if (!document.getElementById(`video-${remoteId}`)) {
-      addRemoteVideo(remoteId, e.streams[0]);
-    }
+    remoteVideo.srcObject = e.streams[0];
+    waitingText.classList.add('hidden');
   };
 
-  // Connection state logging
   pc.oniceconnectionstatechange = () => {
     console.log(`ICE [${remoteId}]: ${pc.iceConnectionState}`);
     if (pc.iceConnectionState === 'connected') {
-      setStatus('Connected ✓', '#4caf50');
+      setStatus('Connected ✓', '#00a884');
     } else if (pc.iceConnectionState === 'failed') {
-      console.log('ICE failed, restarting...');
       pc.restartIce();
+    } else if (pc.iceConnectionState === 'disconnected') {
+      setStatus('Reconnecting...', '#f59f00');
     }
   };
 
@@ -90,34 +98,20 @@ function createPeer(remoteId) {
   return pc;
 }
 
-// --- Add remote video element ---
-function addRemoteVideo(id, stream) {
-  const box = document.createElement('div');
-  box.className = 'video-box';
-  box.id = `box-${id}`;
-
-  const video = document.createElement('video');
-  video.id = `video-${id}`;
-  video.srcObject = stream;
-  video.autoplay = true;
-  video.playsinline = true;
-
-  const label = document.createElement('span');
-  label.className = 'label';
-  label.textContent = `User ${id.slice(0, 5)}`;
-
-  box.appendChild(video);
-  box.appendChild(label);
-  document.getElementById('videos').appendChild(box);
-}
-
-// --- Remove remote video ---
-function removeRemoteVideo(id) {
-  const box = document.getElementById(`box-${id}`);
-  if (box) box.remove();
+// --- Remove peer ---
+function removePeer(id) {
   if (peers[id]) {
     peers[id].close();
     delete peers[id];
+  }
+  // If no peers left, show waiting text & clear remote video
+  if (Object.keys(peers).length === 0) {
+    remoteVideo.srcObject = null;
+    waitingText.classList.remove('hidden');
+    setStatus('Waiting...', '#8696a0');
+    // Reset swap
+    isSwapped = false;
+    callScreen.classList.remove('swapped');
   }
 }
 
@@ -126,14 +120,13 @@ function removeRemoteVideo(id) {
 // =====================
 
 socket.on('connect', () => {
-  setStatus('Connected to server', '#4caf50');
+  setStatus('Connected', '#00a884');
 });
 
 socket.on('connect_error', () => {
-  setStatus('Connection error ✗', '#f44336');
+  setStatus('Connection error ✗', '#ea0038');
 });
 
-// When we join, server sends list of existing users → we call each of them
 socket.on('all-users', async (userIds) => {
   for (const id of userIds) {
     const pc = createPeer(id);
@@ -147,7 +140,6 @@ socket.on('all-users', async (userIds) => {
   }
 });
 
-// Someone sent us an offer → answer it
 socket.on('offer', async (data) => {
   const pc = createPeer(data.from);
   try {
@@ -160,7 +152,6 @@ socket.on('offer', async (data) => {
   }
 });
 
-// We get an answer to our offer
 socket.on('answer', async (data) => {
   const pc = peers[data.from];
   if (pc) {
@@ -172,7 +163,6 @@ socket.on('answer', async (data) => {
   }
 });
 
-// ICE candidate from remote
 socket.on('ice-candidate', async (data) => {
   const pc = peers[data.from];
   if (pc) {
@@ -184,39 +174,53 @@ socket.on('ice-candidate', async (data) => {
   }
 });
 
-// User left
 socket.on('user-left', (id) => {
-  removeRemoteVideo(id);
+  removePeer(id);
 });
 
 // =====================
 // Controls
 // =====================
 
+// Swap button
+document.getElementById('swapBtn').addEventListener('click', swapVideos);
+
+// Tap small video to swap
+document.getElementById('smallVideoWrap').addEventListener('click', swapVideos);
+
+// In swapped mode, tapping the big video (now in PiP position) also swaps back
+document.getElementById('bigVideoWrap').addEventListener('click', () => {
+  if (isSwapped) swapVideos();
+});
+
+// Toggle video
 document.getElementById('toggleVideo').addEventListener('click', (e) => {
   const track = localStream.getVideoTracks()[0];
   if (track) {
     track.enabled = !track.enabled;
     e.currentTarget.classList.toggle('active', track.enabled);
-    e.currentTarget.textContent = track.enabled ? '📹 Video' : '🚫 Video';
   }
 });
 
+// Toggle audio
 document.getElementById('toggleAudio').addEventListener('click', (e) => {
   const track = localStream.getAudioTracks()[0];
   if (track) {
     track.enabled = !track.enabled;
     e.currentTarget.classList.toggle('active', track.enabled);
-    e.currentTarget.textContent = track.enabled ? '🎤 Audio' : '🔇 Audio';
   }
 });
 
-document.getElementById('leaveCall').addEventListener('click', () => {
-  localStream.getTracks().forEach((t) => t.stop());
+// Leave / End call
+function leaveCall() {
+  if (localStream) localStream.getTracks().forEach((t) => t.stop());
   Object.values(peers).forEach((pc) => pc.close());
   socket.disconnect();
   window.location.href = '/';
-});
+}
 
-// Start everything
+document.getElementById('endCall').addEventListener('click', leaveCall);
+document.getElementById('leaveCall').addEventListener('click', leaveCall);
+
+// Start
 start();
